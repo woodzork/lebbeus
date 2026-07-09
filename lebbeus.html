@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Panorama</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: white;
+}
+
+.frame {
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  user-select: none;
+}
+
+.track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  opacity: 0;
+  transition: opacity 4.0s ease-in;
+}
+
+.track.visible {
+  opacity: 1;
+}
+
+.track img {
+  height: 500px;
+  width: auto;
+  display: block;
+  pointer-events: none;
+  transform-origin: top left;
+}
+
+/* ── Hotspot ── */
+.hotspot {
+  position: absolute;
+  z-index: 20;
+  cursor: pointer;
+}
+
+.hotspot-area {
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgba(255, 255, 255, 0);
+  background: rgba(255, 255, 255, 0);
+  border-radius: 4px;
+  box-shadow: 0 0 0 rgba(0,0,0,0);
+  transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.hotspot:hover .hotspot-area,
+.hotspot.active .hotspot-area {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 16px rgba(255,255,255,0.35), inset 0 0 16px rgba(255,255,255,0.15);
+}
+
+.hotspot-popup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  background: rgba(255,255,255,0.97);
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 13px;
+  width: 200px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  transform-origin: center center;
+  transform: translate(-50%, -50%) scale(0.85);
+}
+
+.hotspot.active .hotspot-popup {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  pointer-events: auto;
+}
+
+.popup-title {
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  font-weight: 700;
+  color: #222;
+  margin-bottom: 5px;
+  line-height: 1.3;
+}
+
+.popup-desc {
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  color: #555;
+  line-height: 1.45;
+}
+</style>
+</head>
+<body>
+
+<div class="frame" id="frame">
+  <div class="track" id="track">
+    <img src="https://woodzork.github.io/lebbeus/lebbeus2.jpg" id="img" alt="Panorama">
+  </div>
+</div>
+
+<audio id="bg-audio" src="https://woodzork.github.io/MW1/Night%20Drive-on-site.mp3" type="audio/mpeg" preload="auto"></audio>
+
+<script>
+// ═══════════════════════════════════════════════
+//  HOTSPOT DATA — paste your exported JSON here
+// ═══════════════════════════════════════════════
+const HOTSPOT_DATA = [
+  {
+    "x": 800,
+    "y": 700,
+    "w": 200,
+    "h": 180,
+    "title": "",
+    "desc": ""
+  },
+  {
+    "x": 1400,
+    "y": 850,
+    "w": 200,
+    "h": 180,
+    "title": "",
+    "desc": ""
+  }
+];
+// ═══════════════════════════════════════════════
+
+const track = document.getElementById("track");
+const img   = document.getElementById("img");
+const frame = document.getElementById("frame");
+
+let x = 0, y = 0;
+const speed    = 0.40;
+const endPause = 6000;
+const fadeTime = 2000;
+
+let cyclePaused = true;   // stays paused until first drag
+let started     = false;  // flips on first drag
+let audioStarted = false;
+const bgAudio = document.getElementById('bg-audio');
+
+let dragging = false;
+let moved    = false;
+let startX = 0, startY = 0;
+let startPositionX = 0, startPositionY = 0;
+let activeHotspot = null;
+
+// ── Activate the piece on first drag ──
+function activate() {
+  if (started) return;
+  started      = true;
+  cyclePaused  = false;
+  if (!audioStarted) {
+    audioStarted = true;
+    bgAudio.play().catch(() => {});
+  }
+}
+
+function getScale() {
+  return img.offsetHeight / img.naturalHeight;
+}
+
+function buildHotspots() {
+  HOTSPOT_DATA.forEach((hs) => {
+    const el = document.createElement('div');
+    el.className = 'hotspot';
+    el.dataset.x = hs.x;
+    el.dataset.y = hs.y;
+    el.dataset.w = hs.w;
+    el.dataset.h = hs.h;
+
+    el.innerHTML = `
+      <div class="hotspot-area"></div>
+      <div class="hotspot-popup">
+        <div class="popup-title">${hs.title}</div>
+        <div class="popup-desc">${hs.desc}</div>
+      </div>
+    `;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (moved) return;
+      activate();
+      if (activeHotspot && activeHotspot !== el) {
+        activeHotspot.classList.remove('active');
+      }
+      el.classList.toggle('active');
+      activeHotspot = el.classList.contains('active') ? el : null;
+    });
+
+    el.addEventListener('touchend', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (moved) return;
+      activate();
+      if (activeHotspot && activeHotspot !== el) {
+        activeHotspot.classList.remove('active');
+      }
+      el.classList.toggle('active');
+      activeHotspot = el.classList.contains('active') ? el : null;
+    });
+
+    track.appendChild(el);
+  });
+
+  positionHotspots();
+}
+
+function positionHotspots() {
+  const totalScale = getScale();
+  document.querySelectorAll('.hotspot').forEach(el => {
+    const hx = parseFloat(el.dataset.x);
+    const hy = parseFloat(el.dataset.y);
+    const hw = parseFloat(el.dataset.w);
+    const hh = parseFloat(el.dataset.h);
+    el.style.left   = (hx * totalScale) + 'px';
+    el.style.top    = (hy * totalScale) + 'px';
+    el.style.width  = (hw * totalScale) + 'px';
+    el.style.height = (hh * totalScale) + 'px';
+  });
+}
+
+function closeAllPopups() {
+  document.querySelectorAll('.hotspot').forEach(h => h.classList.remove('active'));
+  activeHotspot = null;
+}
+
+// ── Click ──
+frame.addEventListener("click", (e) => {
+  if (moved) { moved = false; return; }
+  closeAllPopups();
+  activate();
+});
+
+// ── Mouse drag ──
+frame.addEventListener("mousedown", (e) => {
+  dragging = true;
+  moved    = false;
+  startX   = e.clientX;
+  startY   = e.clientY;
+  startPositionX = x;
+  startPositionY = y;
+  frame.style.cursor = "grabbing";
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  moved = true;
+  x = Math.max(0, Math.min(startPositionX - (e.clientX - startX), img.offsetWidth  - frame.offsetWidth));
+  y = Math.max(0, Math.min(startPositionY - (e.clientY - startY), img.offsetHeight - frame.offsetHeight));
+  track.style.transform = `translate(${-x}px, ${-y}px)`;
+});
+
+window.addEventListener("mouseup", () => {
+  dragging = false;
+  frame.style.cursor = "grab";
+  activate();
+});
+
+// ── Touch drag ──
+frame.addEventListener("touchstart", (e) => {
+  if (e.touches.length !== 1) return;
+  dragging = true;
+  moved    = false;
+  startX   = e.touches[0].clientX;
+  startY   = e.touches[0].clientY;
+  startPositionX = x;
+  startPositionY = y;
+  e.preventDefault();
+}, { passive: false });
+
+frame.addEventListener("touchmove", (e) => {
+  if (!dragging || e.touches.length !== 1) return;
+  moved = true;
+  x = Math.max(0, Math.min(startPositionX - (e.touches[0].clientX - startX), img.offsetWidth  - frame.offsetWidth));
+  y = Math.max(0, Math.min(startPositionY - (e.touches[0].clientY - startY), img.offsetHeight - frame.offsetHeight));
+  track.style.transform = `translate(${-x}px, ${-y}px)`;
+  e.preventDefault();
+}, { passive: false });
+
+frame.addEventListener("touchend", (e) => {
+  dragging = false;
+  activate();
+  if (!moved) {
+    closeAllPopups();
+  }
+  moved = false;
+});
+
+// ── Auto-scroll ──
+function animate() {
+  const maxScroll = img.offsetWidth - frame.offsetWidth;
+  if (!dragging && !cyclePaused && maxScroll > 0) {
+    x += speed;
+    if (x >= maxScroll) {
+      cyclePaused = true;
+      setTimeout(() => {
+        track.style.opacity = "0";
+        setTimeout(() => {
+          x = 0; y = 0;
+          track.style.transform = "translate(0px,0px)";
+          track.style.opacity   = "1";
+          cyclePaused = false;
+        }, fadeTime);
+      }, endPause);
+    }
+    track.style.transform = `translate(${-x}px, 0px)`;
+  }
+  requestAnimationFrame(animate);
+}
+
+function init() {
+  buildHotspots();
+  animate();
+  setTimeout(() => track.classList.add('visible'), 100);
+}
+
+img.onload = init;
+if (img.complete) init();
+</script>
+</body>
+</html>
